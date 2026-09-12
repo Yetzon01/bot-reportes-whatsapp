@@ -172,6 +172,7 @@ app.post('/enviar-reporte', async (req, res) => {
                 }
             }
         } else {
+            // Si no vinieran fotos, se envía el texto solo
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
