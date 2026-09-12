@@ -141,6 +141,7 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
+// 4. Enviar reporte: Formato Álbum (El texto va pegado a la primera foto y las demás se agrupan juntas)
 app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
@@ -151,18 +152,30 @@ app.post('/enviar-reporte', async (req, res) => {
         }
         if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo.' });
 
-        await sock.sendMessage(idGrupo, { text: texto });
-
-        if (fotos && Array.isArray(fotos)) {
+        if (fotos && Array.isArray(fotos) && fotos.length > 0) {
             for (let i = 0; i < fotos.length; i++) {
                 const b64 = fotos[i].replace(/^data:image\/\w+;base64,/, '');
-                await sock.sendMessage(idGrupo, {
-                    image: Buffer.from(b64, 'base64'),
-                    caption: `📸 Evidencia ${i + 1} de ${fotos.length}`
-                });
+                const buffer = Buffer.from(b64, 'base64');
+
+                // La foto 1 lleva TODO el reporte como caption/pie de foto
+                // Las fotos 2 y 3 no llevan texto para que WhatsApp las agrupe como álbum
+                const opcionesMensaje = {
+                    image: buffer,
+                    caption: (i === 0) ? texto : undefined
+                };
+
+                await sock.sendMessage(idGrupo, opcionesMensaje);
+
+                // Pausa de 350ms para que WhatsApp agrupe las imágenes como álbum
+                if (i < fotos.length - 1) {
+                    await new Promise(r => setTimeout(r, 350));
+                }
             }
+        } else {
+            await sock.sendMessage(idGrupo, { text: texto });
         }
-        res.json({ ok: true, mensaje: 'Reporte entregado con éxito' });
+
+        res.json({ ok: true, mensaje: 'Reporte entregado como álbum con éxito' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
