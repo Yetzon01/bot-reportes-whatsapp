@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const qrcode = require('qrcode-terminal');
 
 const app = express();
 app.use(cors());
@@ -11,6 +10,8 @@ app.use(express.json({ limit: '50mb' }));
 const CODIGO_INVITACION = 'HAojKl9A0AlLsoLF8FFsiZ'; // Tu grupo
 let sock = null;
 let idGrupoDestino = null;
+let ultimoQR = null;
+let botConectado = false;
 
 // Conexión con WhatsApp
 async function iniciarBotWhatsApp() {
@@ -28,17 +29,18 @@ async function iniciarBotWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("\n==================================================");
-            console.log("ESCANEA ESTE CÓDIGO QR CON EL TELÉFONO DEL BOT:");
-            console.log("==================================================");
-            qrcode.generate(qr, { small: true });
+            ultimoQR = qr;
+            console.log('📢 Nuevo QR generado. Visita la página /qr para escanearlo nítidamente.');
         }
 
         if (connection === 'close') {
+            botConectado = false;
             const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Conexión cerrada. Reconectando...', shouldReconnect);
             if (shouldReconnect) iniciarBotWhatsApp();
         } else if (connection === 'open') {
+            botConectado = true;
+            ultimoQR = null;
             console.log('✅ ¡BOT CONECTADO CON ÉXITO A WHATSAPP!');
             try {
                 idGrupoDestino = await sock.groupAcceptInvite(CODIGO_INVITACION);
@@ -50,9 +52,68 @@ async function iniciarBotWhatsApp() {
     });
 }
 
-// Ruta para probar que el servidor está vivo
+// Pantalla web bonita para escanear el QR nítido desde tu navegador
+app.get('/qr', (req, res) => {
+    if (botConectado) {
+        return res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"><title>Bot Conectado</title></head>
+            <body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f0f2f5;">
+                <div style="background:white;padding:40px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.1);text-align:center;">
+                    <h1 style="color:#25D366;margin:0 0 10px 0;">✅ ¡Bot Conectado!</h1>
+                    <p style="color:#555;font-size:16px;">El bot ya está vinculado y listo para enviar reportes al grupo.</p>
+                </div>
+            </body>
+            </html>
+        `);
+    }
+
+    if (!ultimoQR) {
+        return res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head><meta charset="utf-8"><meta http-equiv="refresh" content="3"><title>Generando QR...</title></head>
+            <body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f0f2f5;">
+                <div style="background:white;padding:40px;border-radius:16px;text-align:center;">
+                    <h2 style="color:#555;">⏳ Generando código QR de WhatsApp...</h2>
+                    <p style="color:#888;">Espera unos segundos (esta pantalla se actualiza sola)...</p>
+                </div>
+            </body>
+            </html>
+        `);
+    }
+
+    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&margin=15&data=${encodeURIComponent(ultimoQR)}`;
+
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="refresh" content="15">
+            <title>Vincular WhatsApp - Bot SIG</title>
+        </head>
+        <body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f0f2f5;padding:20px;box-sizing:border-box;">
+            <div style="background:white;padding:30px;border-radius:16px;box-shadow:0 4px 25px rgba(0,0,0,0.1);text-align:center;max-width:420px;width:100%;">
+                <h2 style="color:#128C7E;margin:0 0 10px 0;">Vincular Bot de WhatsApp</h2>
+                <p style="color:#666;font-size:14px;margin-bottom:20px;">
+                    En tu WhatsApp: <b>3 puntos</b> ➔ <b>Dispositivos vinculados</b> ➔ <b>Vincular un dispositivo</b> y apunta la cámara a este código:
+                </p>
+                <div style="background:#fff;padding:10px;display:inline-block;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.08);">
+                    <img src="${qrImageUrl}" alt="Código QR WhatsApp" style="width:280px;height:280px;display:block;">
+                </div>
+                <p style="color:#888;font-size:12px;margin-top:20px;">🔄 Se renueva automáticamente si no lo escaneas a tiempo.</p>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+// Ruta raíz
 app.get('/', (req, res) => {
-    res.send('🤖 Bot de Reportes Ambientales SIG está ACTIVO y FUNCIONANDO.');
+    res.send('🤖 Bot de Reportes Ambientales SIG está ACTIVO. Entra a <a href="/qr">/qr</a> para vincular.');
 });
 
 // Ruta que recibe el reporte desde tu página web
@@ -60,7 +121,7 @@ app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
 
-        if (!sock) {
+        if (!sock || !botConectado) {
             return res.status(500).json({ error: 'El bot aún no está conectado a WhatsApp.' });
         }
 
