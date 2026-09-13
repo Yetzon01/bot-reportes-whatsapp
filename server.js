@@ -168,20 +168,19 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
-// 4. Enviar reporte: Formato Álbum (Fotos agrupadas sin textos individuales de evidencia)
+// ============================================================
+// 4. ENVIAR REPORTE: ÁLBUM DE 3 FOTOS + TEXTO APARTE
+// ============================================================
+// Estrategia:
+//   PASO 1: Enviar las 3 fotos SIN caption y con solo 80ms de delay
+//           entre cada una. Así WhatsApp las agrupa como UN ÁLBUM.
+//   PASO 2: Esperar 500ms y enviar el texto del reporte aparte.
+//           Así el texto NO rompe el álbum de las fotos.
+// ============================================================
 app.post('/enviar-reporte', async (req, res) => {
     try {
-        let { texto, fotos } = req.body;
+        const { texto, fotos } = req.body;
         if (!sock || !conectado) return res.status(500).json({ error: 'El bot aún no está conectado a WhatsApp.' });
-
-        // Limpiar frases residuales en el mensaje
-        if (texto) {
-            texto = texto
-                .replace(/📸?\s*Evidencia:?[^\n]*/gi, '')
-                .replace(/📸?\s*Foto\s*\d+\s*de\s*\d+:?/gi, '')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim();
-        }
 
         if (!idGrupo) {
             try {
@@ -190,7 +189,7 @@ app.post('/enviar-reporte', async (req, res) => {
                     idGrupo = info.id.includes('@g.us') ? info.id : `${info.id}@g.us`;
                 }
                 await sock.groupAcceptInvite(CODIGO_INVITACION);
-            } catch(e) {
+            } catch(e){
                 try {
                     const grupos = await sock.groupFetchAllParticipating();
                     for (let g in grupos) {
@@ -203,40 +202,43 @@ app.post('/enviar-reporte', async (req, res) => {
         if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.' });
 
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
+            // === PASO 1: Enviar las 3 fotos como ÁLBUM (sin caption) ===
             for (let i = 0; i < fotos.length; i++) {
                 const b64 = fotos[i].replace(/^data:image\/\w+;base64,/, '');
                 const buffer = Buffer.from(b64, 'base64');
 
-                // Solo la primera imagen lleva el reporte completo adjunto como pie de foto
-                // Las fotos secundarias van sin caption para que WhatsApp las compile en un solo álbum/collage
-                const opcionesMensaje = { image: buffer };
-                if (i === 0 && texto) {
-                    opcionesMensaje.caption = texto;
-                }
+                // SIN caption para que WhatsApp agrupe las 3 fotos en un solo álbum
+                await sock.sendMessage(idGrupo, { image: buffer });
 
-                await sock.sendMessage(idGrupo, opcionesMensaje);
-
-                // Pausa corta de 150ms para que WhatsApp las encadene como un solo álbum
+                // 80ms es el tiempo óptimo para que WhatsApp las agrupe como álbum
                 if (i < fotos.length - 1) {
-                    await new Promise(r => setTimeout(r, 150));
+                    await new Promise(r => setTimeout(r, 80));
                 }
             }
+
+            // === PASO 2: Enviar el texto del reporte APARTE (después del álbum) ===
+            await new Promise(r => setTimeout(r, 500));
+            await sock.sendMessage(idGrupo, { text: texto });
+
         } else {
+            // Si no vinieran fotos, se envía el texto solo
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
-        res.json({ ok: true, mensaje: 'Reporte entregado como álbum con éxito' });
+        res.json({ ok: true, mensaje: 'Reporte entregado como álbum + texto con éxito' });
     } catch (err) {
-        console.error('Error al enviar reporte:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Auto-ping cada 9 minutos para que Render NUNCA se duerma
+// Auto-ping cada 5 minutos para que Render NUNCA se duerma
 const MI_URL = 'https://bot-reportes-vi97.onrender.com';
 setInterval(() => {
     fetch(MI_URL).catch(() => {});
-}, 9 * 60 * 1000);
+}, 5 * 60 * 1000);
+
+// Ping inmediato al arrancar (warm-up)
+setTimeout(() => { fetch(MI_URL).catch(() => {}); }, 3000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
