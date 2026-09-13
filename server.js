@@ -194,29 +194,36 @@ app.post('/enviar-reporte', async (req, res) => {
         }
         if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.' });
 
-        if (fotos && Array.isArray(fotos) && fotos.length > 0) {
-            // ---- Paso 1: convertir cada base64 a Buffer sin caption
-            const mensajesImg = fotos.map((foto) => {
+        if (Array.isArray(fotos) && fotos.length > 0) {
+            // ---- Paso 1: convertir cada base64 a Buffer ----
+            const buffers = fotos.map(foto => {
                 const b64 = foto.replace(/^data:image\/\w+;base64,/, '');
-                const buffer = Buffer.from(b64, 'base64');
-                return { image: buffer };        // <-- sin caption
+                return Buffer.from(b64, 'base64');
             });
 
-            // ---- Paso 2: enviarlas todas al mismo tiempo
-            const promesasFotos = mensajesImg.map((msg) => sock.sendMessage(idGrupo, msg));
-            await Promise.all(promesasFotos);
+            // ---- Paso 2: enviar todas las fotos SIN caption (en paralelo) ----
+            const sendPromises = buffers.map(buf =>
+                sock.sendMessage(idGrupo, {
+                    image: buf,
+                    mimetype: 'image/jpeg',
+                    caption: ''          // **¡Sin texto!**
+                })
+            );
+            await Promise.all(sendPromises);
 
-            // ---- Paso 3: enviar el texto del reporte justo después
-            if (texto) {
-                await sock.sendMessage(idGrupo, { text: texto });
-            }
+            // ---- Paso 3: opcional pausa muy corta (≈150 ms) antes del texto
+            await new Promise(r => setTimeout(r, 150));
+
+            // ---- Paso 4: enviar el texto del reporte como mensaje independiente
+            if (texto) await sock.sendMessage(idGrupo, { text: texto });
         } else {
-            // Sólo texto (no hay fotos)
+            // Sólo texto
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
         res.json({ ok: true, mensaje: 'Reporte entregado como álbum con éxito' });
     } catch (err) {
+        console.error('❌ Error al enviar reporte:', err);
         res.status(500).json({ error: err.message });
     }
 });
