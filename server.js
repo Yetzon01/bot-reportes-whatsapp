@@ -168,16 +168,16 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
-// 4. Enviar reporte: Formato Álbum (El texto va pegado a la primera foto y las demás se agrupan juntas sin textos de "Evidencia")
+// 4. Enviar reporte: Formato Álbum (Fotos agrupadas sin textos individuales de evidencia)
 app.post('/enviar-reporte', async (req, res) => {
     try {
         let { texto, fotos } = req.body;
         if (!sock || !conectado) return res.status(500).json({ error: 'El bot aún no está conectado a WhatsApp.' });
 
-        // Limpiar frases como "Evidencia 1 de 3", "Foto 2 de 3", etc. del texto
+        // Limpiar frases residuales en el mensaje
         if (texto) {
             texto = texto
-                .replace(/📸?\s*Evidencia\s*\d+\s*de\s*\d+:?/gi, '')
+                .replace(/📸?\s*Evidencia:?[^\n]*/gi, '')
                 .replace(/📸?\s*Foto\s*\d+\s*de\s*\d+:?/gi, '')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
@@ -207,9 +207,8 @@ app.post('/enviar-reporte', async (req, res) => {
                 const b64 = fotos[i].replace(/^data:image\/\w+;base64,/, '');
                 const buffer = Buffer.from(b64, 'base64');
 
-                // Formato Álbum para WhatsApp:
-                // Solo la primera imagen lleva el texto completo del reporte.
-                // Las fotos secundarias NO llevan caption para que WhatsApp las agrupe como álbum.
+                // Solo la primera imagen lleva el reporte completo adjunto como pie de foto
+                // Las fotos secundarias van sin caption para que WhatsApp las compile en un solo álbum/collage
                 const opcionesMensaje = { image: buffer };
                 if (i === 0 && texto) {
                     opcionesMensaje.caption = texto;
@@ -217,13 +216,12 @@ app.post('/enviar-reporte', async (req, res) => {
 
                 await sock.sendMessage(idGrupo, opcionesMensaje);
 
-                // Intervalo de 180ms para garantizar que WhatsApp forme el álbum en el grupo
+                // Pausa corta de 150ms para que WhatsApp las encadene como un solo álbum
                 if (i < fotos.length - 1) {
-                    await new Promise(r => setTimeout(r, 180));
+                    await new Promise(r => setTimeout(r, 150));
                 }
             }
         } else {
-            // Si no vinieran fotos, se envía el texto solo
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
