@@ -1,14 +1,25 @@
+// ---------------------------------------------------------------------
+//  server.js  –  Bot de WhatsApp (Baileys)  –  SIG Ecosocial
+// ---------------------------------------------------------------------
+
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason
+} = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// ---------------------------------------------------------------------
+//  Configuración
+// ---------------------------------------------------------------------
 const CODIGO_INVITACION = 'HAojKl9A0AlLsoLF8FFsiZ';
 const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
 const SUPABASE_URL = 'https://zezcmftcbbzplhtdqotd.supabase.co';
@@ -19,18 +30,35 @@ let idGrupo = null;
 let qrActual = null;
 let conectado = false;
 
-// 1. Restaurar sesión permanente desde Supabase al iniciar
+// ---------------------------------------------------------------------
+//  1️⃣  Restaurar sesión permanente desde Supabase al iniciar
+// ---------------------------------------------------------------------
 async function restaurarSesionDesdeSupabase() {
     try {
         if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
-        const resp = await fetch(`${SUPABASE_URL}/rest/v1/mapas_comunales?usuario_email=eq.bot_whatsapp_session&select=geometria_mapa`, {
-            headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-        });
+        const resp = await fetch(
+            `${SUPABASE_URL}/rest/v1/mapas_comunales?usuario_email=eq.bot_whatsapp_session&select=geometria_mapa`,
+            {
+                headers: {
+                    apikey: SUPABASE_KEY,
+                    Authorization: `Bearer ${SUPABASE_KEY}`
+                }
+            }
+        );
         const data = await resp.json();
-        if (data && data.length > 0 && data[0].geometria_mapa && data[0].geometria_mapa.archivos_auth) {
+        if (
+            data &&
+            data.length > 0 &&
+            data[0].geometria_mapa &&
+            data[0].geometria_mapa.archivos_auth
+        ) {
             const archivos = data[0].geometria_mapa.archivos_auth;
             for (let nombre in archivos) {
-                fs.writeFileSync(path.join(AUTH_DIR, nombre), archivos[nombre], 'utf8');
+                fs.writeFileSync(
+                    path.join(AUTH_DIR, nombre),
+                    archivos[nombre],
+                    'utf8'
+                );
             }
             console.log('✅ Sesión de WhatsApp restaurada desde Supabase.');
         }
@@ -39,7 +67,9 @@ async function restaurarSesionDesdeSupabase() {
     }
 }
 
-// 2. Guardar sesión permanente en Supabase (solo ~15 KB)
+// ---------------------------------------------------------------------
+//  2️⃣  Guardar sesión permanente en Supabase (cada ~2.5 s)
+// ---------------------------------------------------------------------
 let temporizadorGuardado = null;
 function programarGuardadoSesion() {
     clearTimeout(temporizadorGuardado);
@@ -61,29 +91,50 @@ function programarGuardadoSesion() {
                 geometria_mapa: { archivos_auth: archivosData }
             });
 
-            const check = await fetch(`${SUPABASE_URL}/rest/v1/mapas_comunales?usuario_email=eq.bot_whatsapp_session&select=id`, {
-                headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-            });
+            const check = await fetch(
+                `${SUPABASE_URL}/rest/v1/mapas_comunales?usuario_email=eq.bot_whatsapp_session&select=id`,
+                {
+                    headers: {
+                        apikey: SUPABASE_KEY,
+                        Authorization: `Bearer ${SUPABASE_KEY}`
+                    }
+                }
+            );
             const filas = await check.json();
             if (filas && filas.length > 0) {
-                await fetch(`${SUPABASE_URL}/rest/v1/mapas_comunales?id=eq.${filas[0].id}`, {
-                    method: 'PATCH',
-                    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
-                    body
-                });
+                await fetch(
+                    `${SUPABASE_URL}/rest/v1/mapas_comunales?id=eq.${filas[0].id}`,
+                    {
+                        method: 'PATCH',
+                        headers: {
+                            apikey: SUPABASE_KEY,
+                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body
+                    }
+                );
             } else {
                 await fetch(`${SUPABASE_URL}/rest/v1/mapas_comunales`, {
                     method: 'POST',
-                    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+                    headers: {
+                        apikey: SUPABASE_KEY,
+                        Authorization: `Bearer ${SUPABASE_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
                     body
                 });
             }
             console.log('💾 Sesión de WhatsApp respaldada permanentemente.');
-        } catch (err) { }
+        } catch (err) {
+            /* ignore */
+        }
     }, 2500);
 }
 
-// 3. Conexión al socket de WhatsApp
+// ---------------------------------------------------------------------
+//  3️⃣  Conexión al socket de WhatsApp
+// ---------------------------------------------------------------------
 async function iniciarBot() {
     await restaurarSesionDesdeSupabase();
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -99,20 +150,26 @@ async function iniciarBot() {
         programarGuardadoSesion();
     });
 
-    sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', async update => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) qrActual = qr;
 
         if (connection === 'close') {
             conectado = false;
-            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
             const reconectar = statusCode !== DisconnectReason.loggedOut;
-            console.log(`⚠️ Conexión cerrada. Código: ${statusCode}. Reconectar: ${reconectar}`);
+            console.log(
+                `⚠️ Conexión cerrada. Código: ${statusCode}. Reconectar: ${reconectar}`
+            );
             if (reconectar) {
                 setTimeout(() => iniciarBot(), 3000);
             } else {
-                console.log('⚠️ Sesión cerrada en WhatsApp. Limpiando credenciales locales...');
-                try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) { }
+                console.log(
+                    '⚠️ Sesión cerrada en WhatsApp. Limpiando credenciales locales...'
+                );
+                try {
+                    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+                } catch (_) {}
                 setTimeout(() => iniciarBot(), 3000);
             }
         } else if (connection === 'open') {
@@ -120,11 +177,17 @@ async function iniciarBot() {
             qrActual = null;
             console.log('✅ ¡BOT CONECTADO A WHATSAPP!');
             programarGuardadoSesion();
+
             try {
                 const info = await sock.groupGetInviteInfo(CODIGO_INVITACION);
                 if (info && info.id) {
-                    idGrupo = info.id.includes('@g.us') ? info.id : `${info.id}@g.us`;
-                    console.log(`✅ Grupo identificado por código: ${info.subject || ''} (${idGrupo})`);
+                    idGrupo = info.id.includes('@g.us')
+                        ? info.id
+                        : `${info.id}@g.us`;
+                    console.log(
+                        `✅ Grupo identificado por código: ${info.subject ||
+                            ''} (${idGrupo})`
+                    );
                 }
                 await sock.groupAcceptInvite(CODIGO_INVITACION);
             } catch (e) {
@@ -134,17 +197,21 @@ async function iniciarBot() {
                         const grupos = await sock.groupFetchAllParticipating();
                         for (let g in grupos) {
                             idGrupo = g;
-                            console.log(`✅ Grupo recuperado de chats activos: ${idGrupo}`);
+                            console.log(
+                                `✅ Grupo recuperado de chats activos: ${idGrupo}`
+                            );
                             break;
                         }
-                    } catch (errG) { }
+                    } catch (_) {}
                 }
             }
         }
     });
 }
 
-// Estado del bot (para depuración)
+// ---------------------------------------------------------------------
+//  Estado del bot (para depuración)
+// ---------------------------------------------------------------------
 app.get('/estado', (req, res) => {
     res.json({
         ok: true,
@@ -154,88 +221,121 @@ app.get('/estado', (req, res) => {
     });
 });
 
-// QR visual (para emparejar el teléfono)
+// ---------------------------------------------------------------------
+//  QR visual (para emparejar el teléfono)
+// ---------------------------------------------------------------------
 app.get('/qr', (req, res) => {
     if (conectado) {
-        return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bot Conectado</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:1px solid #238636;text-align:center;max-width:420px;"><h1 style="color:#2ea043;margin:0 0 15px 0;font-size:24px;">✅ ¡Bot Conectado a WhatsApp!</h1><p style="color:#8b949e;font-size:14px;line-height:1.5;">El bot del Sistema SIG Ecosocial está activo y listo para recibir y publicar reportes de riesgos ambientales en el grupo.</p><div style="margin-top:20px;padding:10px;background:#21262d;border-radius:8px;font-size:12px;color:#58a6ff;">Grupo ID: ${idGrupo || 'Conectado'}</div></div></body></html>`);
+        return res.send(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bot Conectado</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:1px solid #238636;text-align:center;max-width:420px;"><h1 style="color:#2ea043;margin:0 0 15px 0;font-size:24px;">✅ ¡Bot Conectado a WhatsApp!</h1><p style="color:#8b949e;font-size:14px;line-height:1.5;">El bot del Sistema SIG Ecosocial está activo y listo para recibir y publicar reportes de riesgos ambientales en el grupo.</p><div style="margin-top:20px;padding:10px;background:#21262d;border-radius:8px;font-size:12px;color:#58a6ff;">Grupo ID: ${idGrupo ||
+                'Conectado'}</div></div></body></html>`
+        );
     }
     if (!qrActual) {
-        return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Generando QR...</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:1px solid #30363d;text-align:center;max-width:400px;"><h2 style="color:#e6edf3;margin:0 0 10px 0;">⏳ Iniciando Bot...</h2><p style="color:#8b949e;font-size:14px;">Generando código QR de vinculación. Esta página se recargará automáticamente en unos segundos.</p></div></body></html>`);
+        return res.send(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Generando QR...</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:1px solid #30363d;text-align:center;max-width:400px;"><h2 style="color:#e6edf3;margin:0 0 10px 0;">⏳ Iniciando Bot...</h2><p style="color:#8b949e;font-size:14px;">Generando código QR de vinculación. Esta página se recargará automáticamente en unos segundos.</p></div></body></html>`
+        );
     }
-    const img = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=15&data=${encodeURIComponent(qrActual)}`;
-    res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>QR Bot WhatsApp</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:2px solid #238636;box-shadow:0 8px 32px rgba(0,0,0,0.5);text-align:center;max-width:380px;"><h2 style="color:#2ea043;margin:0 0 10px 0;">Vincular Bot con WhatsApp</h2><p style="color:#8b949e;font-size:13.5px;margin-bottom:15px;">Abre WhatsApp en tu teléfono ➔ <b>Dispositivos vinculados</b> ➔ <b>Vincular un dispositivo</b> y escanea:</p><img src="${img}" style="width:280px;height:280px;border-radius:12px;border:2px solid #238636;background:#fff;padding:8px;"><p style="color:#6e7681;font-size:12px;margin-top:15px;">🔄 Se actualiza automáticamente cada 15 segundos.</p></div></body></html>`);
+    const img = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=15&data=${encodeURIComponent(
+        qrActual
+    )}`;
+    res.send(
+        `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>QR Bot WhatsApp</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:2px solid #238636;box-shadow:0 8px 32px rgba(0,0,0,0.5);text-align:center;max-width:380px;"><h2 style="color:#2ea043;margin:0 0 10px 0;">Vincular Bot con WhatsApp</h2><p style="color:#8b949e;font-size:13.5px;margin-bottom:15px;">Abre WhatsApp en tu teléfono ➔ <b>Dispositivos vinculados</b> ➔ <b>Vincular un dispositivo</b> y escanea:</p><img src="${img}" style="width:280px;height:280px;border-radius:12px;border:2px solid #238636;background:#fff;padding:8px;"><p style="color:#6e7681;font-size:12px;margin-top:15px;">🔄 Se actualiza automáticamente cada 15 segundos.</p></div></body></html>`
+    );
 });
 
-app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
+app.get('/', (req, res) =>
+    res.send(
+        '🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'
+    )
+);
 
-// ----------------------------------------------------
-// 4. ENVIAR REPORTE: fotos sin caption + texto separado
-// ----------------------------------------------------
+// ---------------------------------------------------------------------
+//  4️⃣  ENVIAR REPORTE –  fotos SIN caption + texto separado
+// ---------------------------------------------------------------------
 app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
-        if (!sock || !conectado) return res.status(500).json({ error: 'El bot aún no está conectado a WhatsApp.' });
+        if (!sock || !conectado)
+            return res
+                .status(500)
+                .json({ error: 'El bot aún no está conectado a WhatsApp.' });
 
-        // Asegurarse de que idGrupo esté definido
+        // --------------------------------------------------------------
+        // Garantizar que idGrupo esté disponible
+        // --------------------------------------------------------------
         if (!idGrupo) {
             try {
                 const info = await sock.groupGetInviteInfo(CODIGO_INVITACION);
-                if (info && info.id) idGrupo = info.id.includes('@g.us') ? info.id : `${info.id}@g.us`;
+                if (info && info.id)
+                    idGrupo = info.id.includes('@g.us')
+                        ? info.id
+                        : `${info.id}@g.us`;
                 await sock.groupAcceptInvite(CODIGO_INVITACION);
-            } catch (e) {
+            } catch (_) {
                 try {
                     const grupos = await sock.groupFetchAllParticipating();
                     for (let g in grupos) {
                         idGrupo = g;
                         break;
                     }
-                } catch (errG) { }
+                } catch (_) {}
             }
         }
-        if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.' });
+        if (!idGrupo)
+            return res.status(500).json({
+                error:
+                    'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.'
+            });
 
+        // --------------------------------------------------------------
+        // Envío de fotos → 100 % sin caption
+        // --------------------------------------------------------------
         if (Array.isArray(fotos) && fotos.length > 0) {
-            // ---- Paso 1: convertir cada base64 a Buffer ----
+            // 1️⃣ Convertir cada foto base64 a Buffer
             const buffers = fotos.map(foto => {
                 const b64 = foto.replace(/^data:image\/\w+;base64,/, '');
                 return Buffer.from(b64, 'base64');
             });
 
-            // ---- Paso 2: enviar todas las fotos SIN caption (en paralelo) ----
-            const sendPromises = buffers.map((buf, index) =>
-    sock.sendMessage(idGrupo, {
-        image: buf,
-        mimetype: 'image/jpeg',
-        // Si solo quieres que la primera foto tenga el texto como descripción:
-        caption: index === 0 ? texto : '' 
-    })
-);
-            await Promise.all(sendPromises);
+            // 2️⃣ Enviar todas las imágenes en paralelo, sin caption
+            const sendPromises = buffers.map(buf =>
+                sock.sendMessage(idGrupo, {
+                    image: buf,
+                    mimetype: 'image/jpeg',
+                    caption: '' // ← <-- NINGÚN texto bajo la foto
+                })
+            );
+            await Promise.all(sendPromises); // WhatsApp las agrupa como álbum
 
-            // ---- Paso 3: opcional pausa muy corta (≈150 ms) antes del texto
+            // 3️⃣ Pequeña pausa para que el álbum se registre antes del texto
             await new Promise(r => setTimeout(r, 150));
 
-            // ---- Paso 4: enviar el texto del reporte como mensaje independiente
+            // 4️⃣ Enviar el texto del reporte como mensaje independiente
             if (texto) await sock.sendMessage(idGrupo, { text: texto });
         } else {
-            // Sólo texto
-            await sock.sendMessage(idGrupo, { text: texto });
+            // Sólo texto (no hay fotos)
+            if (texto) await sock.sendMessage(idGrupo, { text: texto });
         }
 
-        res.json({ ok: true, mensaje: 'Reporte entregado como álbum con éxito' });
+        res.json({ ok: true, mensaje: 'Reporte entregado como álbum sin captions' });
     } catch (err) {
         console.error('❌ Error al enviar reporte:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Mantener viva la app en Render (ping cada 9 min)
+// ---------------------------------------------------------------------
+//  Mantener viva la app en Render (ping cada 9 min)
+// ---------------------------------------------------------------------
 const MI_URL = 'https://bot-reportes-vi97.onrender.com';
 setInterval(() => {
-    fetch(MI_URL).catch(() => { });
+    fetch(MI_URL).catch(() => {});
 }, 9 * 60 * 1000);
 
-// -----------------------------------------------------------------
+// ---------------------------------------------------------------------
+//  Arranque del servidor
+// ---------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Servidor en puerto ${PORT}`);
