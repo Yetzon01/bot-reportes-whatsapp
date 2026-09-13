@@ -168,15 +168,7 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
-// ============================================================
-// 4. ENVIAR REPORTE: ÁLBUM DE 3 FOTOS + TEXTO APARTE
-// ============================================================
-// Estrategia:
-//   PASO 1: Enviar las 3 fotos SIN caption y con solo 80ms de delay
-//           entre cada una. Así WhatsApp las agrupa como UN ÁLBUM.
-//   PASO 2: Esperar 500ms y enviar el texto del reporte aparte.
-//           Así el texto NO rompe el álbum de las fotos.
-// ============================================================
+// 4. Enviar reporte: Formato Álbum (todas las fotos se envían juntas para que WhatsApp las agrupe)
 app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
@@ -202,43 +194,42 @@ app.post('/enviar-reporte', async (req, res) => {
         if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.' });
 
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
-            // === PASO 1: Enviar las 3 fotos como ÁLBUM (sin caption) ===
-            for (let i = 0; i < fotos.length; i++) {
-                const b64 = fotos[i].replace(/^data:image\/\w+;base64,/, '');
+            // 1. Preparar TODOS los buffers de imagen primero (sin enviar nada aún)
+            const mensajes = fotos.map((foto, i) => {
+                const b64 = foto.replace(/^data:image\/\w+;base64,/, '');
                 const buffer = Buffer.from(b64, 'base64');
-
-                // SIN caption para que WhatsApp agrupe las 3 fotos en un solo álbum
-                await sock.sendMessage(idGrupo, { image: buffer });
-
-                // 80ms es el tiempo óptimo para que WhatsApp las agrupe como álbum
-                if (i < fotos.length - 1) {
-                    await new Promise(r => setTimeout(r, 80));
+                const opciones = { image: buffer };
+                // Solo la primera imagen lleva el caption con el texto del reporte
+                if (i === 0) {
+                    opciones.caption = texto;
                 }
-            }
+                return opciones;
+            });
 
-            // === PASO 2: Enviar el texto del reporte APARTE (después del álbum) ===
-            await new Promise(r => setTimeout(r, 500));
-            await sock.sendMessage(idGrupo, { text: texto });
-
+            // 2. Enviar todas las imágenes CASI SIMULTÁNEAMENTE con un escalonamiento mínimo
+            //    para mantener el orden y que WhatsApp las agrupe como álbum/collage
+            const promesas = mensajes.map((msg, i) =>
+                new Promise(resolve =>
+                    setTimeout(() => resolve(sock.sendMessage(idGrupo, msg)), i * 50)
+                )
+            );
+            await Promise.all(promesas);
         } else {
             // Si no vinieran fotos, se envía el texto solo
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
-        res.json({ ok: true, mensaje: 'Reporte entregado como álbum + texto con éxito' });
+        res.json({ ok: true, mensaje: 'Reporte entregado como álbum con éxito' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Auto-ping cada 5 minutos para que Render NUNCA se duerma
+// Auto-ping cada 9 minutos para que Render NUNCA se duerma
 const MI_URL = 'https://bot-reportes-vi97.onrender.com';
 setInterval(() => {
     fetch(MI_URL).catch(() => {});
-}, 5 * 60 * 1000);
-
-// Ping inmediato al arrancar (warm-up)
-setTimeout(() => { fetch(MI_URL).catch(() => {}); }, 3000);
+}, 9 * 60 * 1000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
