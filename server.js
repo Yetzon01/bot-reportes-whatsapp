@@ -168,7 +168,8 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
-// 4. Enviar reporte: Formato Álbum (todas las fotos se envían juntas para que WhatsApp las agrupe)
+// 4. Enviar reporte al grupo de WhatsApp
+//    ESTRATEGIA: Fotos SIN caption + texto como mensaje aparte = 4 mensajes que se ven juntos como un bloque
 app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
@@ -194,28 +195,25 @@ app.post('/enviar-reporte', async (req, res) => {
         if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.' });
 
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
-            // 1. Preparar TODOS los buffers de imagen primero (sin enviar nada aún)
-            const mensajes = fotos.map((foto, i) => {
+            // PASO 1: Preparar todos los buffers de imagen SIN caption
+            const mensajesImg = fotos.map((foto) => {
                 const b64 = foto.replace(/^data:image\/\w+;base64,/, '');
                 const buffer = Buffer.from(b64, 'base64');
-                const opciones = { image: buffer };
-                // Solo la primera imagen lleva el caption con el texto del reporte
-                if (i === 0) {
-                    opciones.caption = texto;
-                }
-                return opciones;
+                return { image: buffer };
             });
 
-            // 2. Enviar todas las imágenes CASI SIMULTÁNEAMENTE con un escalonamiento mínimo
-            //    para mantener el orden y que WhatsApp las agrupe como álbum/collage
-            const promesas = mensajes.map((msg, i) =>
-                new Promise(resolve =>
-                    setTimeout(() => resolve(sock.sendMessage(idGrupo, msg)), i * 50)
-                )
-            );
-            await Promise.all(promesas);
+            // PASO 2: Enviar las 3 fotos SIMULTÁNEAMENTE sin texto
+            //         Al no tener caption y llegar juntas, WhatsApp las agrupa como álbum/collage
+            const promesasFotos = mensajesImg.map((msg) => sock.sendMessage(idGrupo, msg));
+            await Promise.all(promesasFotos);
+
+            // PASO 3: Enviar el texto del reporte inmediatamente después
+            //         Como viene del mismo remitente justo después del álbum,
+            //         WhatsApp lo muestra pegado al álbum formando un solo bloque visual
+            if (texto) {
+                await sock.sendMessage(idGrupo, { text: texto });
+            }
         } else {
-            // Si no vinieran fotos, se envía el texto solo
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
