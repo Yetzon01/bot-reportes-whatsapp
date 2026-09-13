@@ -168,11 +168,20 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
-// 4. Enviar reporte: Formato Álbum (El texto va pegado a la primera foto y las demás se agrupan juntas)
+// 4. Enviar reporte: Formato Álbum (El texto va pegado a la primera foto y las demás se agrupan juntas sin textos de "Evidencia")
 app.post('/enviar-reporte', async (req, res) => {
     try {
-        const { texto, fotos } = req.body;
+        let { texto, fotos } = req.body;
         if (!sock || !conectado) return res.status(500).json({ error: 'El bot aún no está conectado a WhatsApp.' });
+
+        // Limpiar frases como "Evidencia 1 de 3", "Foto 2 de 3", etc. del texto
+        if (texto) {
+            texto = texto
+                .replace(/📸?\s*Evidencia\s*\d+\s*de\s*\d+:?/gi, '')
+                .replace(/📸?\s*Foto\s*\d+\s*de\s*\d+:?/gi, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
 
         if (!idGrupo) {
             try {
@@ -181,7 +190,7 @@ app.post('/enviar-reporte', async (req, res) => {
                     idGrupo = info.id.includes('@g.us') ? info.id : `${info.id}@g.us`;
                 }
                 await sock.groupAcceptInvite(CODIGO_INVITACION);
-            } catch(e){
+            } catch(e) {
                 try {
                     const grupos = await sock.groupFetchAllParticipating();
                     for (let g in grupos) {
@@ -200,17 +209,17 @@ app.post('/enviar-reporte', async (req, res) => {
 
                 // Formato Álbum para WhatsApp:
                 // Solo la primera imagen lleva el texto completo del reporte.
-                // Las fotos 2 y 3 NO llevan propiedad caption para que WhatsApp las agrupe en un solo álbum
+                // Las fotos secundarias NO llevan caption para que WhatsApp las agrupe como álbum.
                 const opcionesMensaje = { image: buffer };
-                if (i === 0) {
+                if (i === 0 && texto) {
                     opcionesMensaje.caption = texto;
                 }
 
                 await sock.sendMessage(idGrupo, opcionesMensaje);
 
-                // Pausa corta (250ms) para que WhatsApp agrupe las 3 fotos en un solo álbum
+                // Intervalo de 180ms para garantizar que WhatsApp forme el álbum en el grupo
                 if (i < fotos.length - 1) {
-                    await new Promise(r => setTimeout(r, 250));
+                    await new Promise(r => setTimeout(r, 180));
                 }
             }
         } else {
@@ -220,6 +229,7 @@ app.post('/enviar-reporte', async (req, res) => {
 
         res.json({ ok: true, mensaje: 'Reporte entregado como álbum con éxito' });
     } catch (err) {
+        console.error('Error al enviar reporte:', err);
         res.status(500).json({ error: err.message });
     }
 });
