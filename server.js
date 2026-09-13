@@ -202,13 +202,14 @@ app.post('/enviar-reporte', async (req, res) => {
             });
 
             // ---- Paso 2: enviar todas las fotos SIN caption (en paralelo) ----
-            const sendPromises = buffers.map(buf =>
-                sock.sendMessage(idGrupo, {
-                    image: buf,
-                    mimetype: 'image/jpeg',
-                    caption: ''          // **¡Sin texto!**
-                })
-            );
+            const sendPromises = buffers.map((buf, index) =>
+    sock.sendMessage(idGrupo, {
+        image: buf,
+        mimetype: 'image/jpeg',
+        // Si solo quieres que la primera foto tenga el texto como descripción:
+        caption: index === 0 ? texto : '' 
+    })
+);
             await Promise.all(sendPromises);
 
             // ---- Paso 3: opcional pausa muy corta (≈150 ms) antes del texto
