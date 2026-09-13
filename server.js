@@ -39,7 +39,7 @@ async function restaurarSesionDesdeSupabase() {
     }
 }
 
-// 2. Guardar sesión permanente en Supabase (solo 15 KB de texto)
+// 2. Guardar sesión permanente en Supabase (solo ~15 KB)
 let temporizadorGuardado = null;
 function programarGuardadoSesion() {
     clearTimeout(temporizadorGuardado);
@@ -79,15 +79,15 @@ function programarGuardadoSesion() {
                 });
             }
             console.log('💾 Sesión de WhatsApp respaldada permanentemente.');
-        } catch (err) {}
+        } catch (err) { }
     }, 2500);
 }
 
-// 3. Conexión WhatsApp
+// 3. Conexión al socket de WhatsApp
 async function iniciarBot() {
     await restaurarSesionDesdeSupabase();
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    
+
     sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
@@ -112,7 +112,7 @@ async function iniciarBot() {
                 setTimeout(() => iniciarBot(), 3000);
             } else {
                 console.log('⚠️ Sesión cerrada en WhatsApp. Limpiando credenciales locales...');
-                try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch(e){}
+                try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) { }
                 setTimeout(() => iniciarBot(), 3000);
             }
         } else if (connection === 'open') {
@@ -137,24 +137,24 @@ async function iniciarBot() {
                             console.log(`✅ Grupo recuperado de chats activos: ${idGrupo}`);
                             break;
                         }
-                    } catch(errG) {}
+                    } catch (errG) { }
                 }
             }
         }
     });
 }
 
-// Estado del Bot para verificación desde el mapa
+// Estado del bot (para depuración)
 app.get('/estado', (req, res) => {
     res.json({
         ok: true,
-        conectado: conectado,
+        conectado,
         tieneQr: !!qrActual,
         idGrupo: idGrupo || null
     });
 });
 
-// Pantalla web QR
+// QR visual (para emparejar el teléfono)
 app.get('/qr', (req, res) => {
     if (conectado) {
         return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bot Conectado</title></head><body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;background:#0d1117;color:#fff;"><div style="background:#161b22;padding:30px;border-radius:16px;border:1px solid #238636;text-align:center;max-width:420px;"><h1 style="color:#2ea043;margin:0 0 15px 0;font-size:24px;">✅ ¡Bot Conectado a WhatsApp!</h1><p style="color:#8b949e;font-size:14px;line-height:1.5;">El bot del Sistema SIG Ecosocial está activo y listo para recibir y publicar reportes de riesgos ambientales en el grupo.</p><div style="margin-top:20px;padding:10px;background:#21262d;border-radius:8px;font-size:12px;color:#58a6ff;">Grupo ID: ${idGrupo || 'Conectado'}</div></div></body></html>`);
@@ -168,52 +168,50 @@ app.get('/qr', (req, res) => {
 
 app.get('/', (req, res) => res.send('🤖 Bot ACTIVO y PERMANENTE. Entra a <a href="/qr">/qr</a> para vincular.'));
 
-// 4. Enviar reporte al grupo de WhatsApp
-//    ESTRATEGIA: Fotos SIN caption + texto como mensaje aparte = 4 mensajes que se ven juntos como un bloque
+// ----------------------------------------------------
+// 4. ENVIAR REPORTE: fotos sin caption + texto separado
+// ----------------------------------------------------
 app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
         if (!sock || !conectado) return res.status(500).json({ error: 'El bot aún no está conectado a WhatsApp.' });
 
+        // Asegurarse de que idGrupo esté definido
         if (!idGrupo) {
             try {
                 const info = await sock.groupGetInviteInfo(CODIGO_INVITACION);
-                if (info && info.id) {
-                    idGrupo = info.id.includes('@g.us') ? info.id : `${info.id}@g.us`;
-                }
+                if (info && info.id) idGrupo = info.id.includes('@g.us') ? info.id : `${info.id}@g.us`;
                 await sock.groupAcceptInvite(CODIGO_INVITACION);
-            } catch(e){
+            } catch (e) {
                 try {
                     const grupos = await sock.groupFetchAllParticipating();
                     for (let g in grupos) {
                         idGrupo = g;
                         break;
                     }
-                } catch(errG) {}
+                } catch (errG) { }
             }
         }
         if (!idGrupo) return res.status(500).json({ error: 'No se encontró el grupo de WhatsApp. Asegúrate de que el bot esté en el grupo.' });
 
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
-            // PASO 1: Preparar todos los buffers de imagen SIN caption
+            // ---- Paso 1: convertir cada base64 a Buffer sin caption
             const mensajesImg = fotos.map((foto) => {
                 const b64 = foto.replace(/^data:image\/\w+;base64,/, '');
                 const buffer = Buffer.from(b64, 'base64');
-                return { image: buffer };
+                return { image: buffer };        // <-- sin caption
             });
 
-            // PASO 2: Enviar las 3 fotos SIMULTÁNEAMENTE sin texto
-            //         Al no tener caption y llegar juntas, WhatsApp las agrupa como álbum/collage
+            // ---- Paso 2: enviarlas todas al mismo tiempo
             const promesasFotos = mensajesImg.map((msg) => sock.sendMessage(idGrupo, msg));
             await Promise.all(promesasFotos);
 
-            // PASO 3: Enviar el texto del reporte inmediatamente después
-            //         Como viene del mismo remitente justo después del álbum,
-            //         WhatsApp lo muestra pegado al álbum formando un solo bloque visual
+            // ---- Paso 3: enviar el texto del reporte justo después
             if (texto) {
                 await sock.sendMessage(idGrupo, { text: texto });
             }
         } else {
+            // Sólo texto (no hay fotos)
             await sock.sendMessage(idGrupo, { text: texto });
         }
 
@@ -223,12 +221,13 @@ app.post('/enviar-reporte', async (req, res) => {
     }
 });
 
-// Auto-ping cada 9 minutos para que Render NUNCA se duerma
+// Mantener viva la app en Render (ping cada 9 min)
 const MI_URL = 'https://bot-reportes-vi97.onrender.com';
 setInterval(() => {
-    fetch(MI_URL).catch(() => {});
+    fetch(MI_URL).catch(() => { });
 }, 9 * 60 * 1000);
 
+// -----------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Servidor en puerto ${PORT}`);
