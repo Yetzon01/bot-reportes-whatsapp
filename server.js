@@ -1,20 +1,13 @@
-require('dotenv').config(); // ← necesitas instalar dotenv
 const express = require('express');
 const cors = require('cors');
-
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// =============== CONFIGURACIÓN (desde .env) ===============
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const CHAT_ID = process.env.CHAT_ID;
+// =============== CONFIGURACIÓN TELEGRAM ===============
+const TELEGRAM_TOKEN = '8952498024:AAE8T6JoQq3t1l70JIWvvbUkdyyUwQgXifw';
+const CHAT_ID = '-1004417748357';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-
-if (!TELEGRAM_TOKEN || !CHAT_ID) {
-    console.error('❌ Faltan TELEGRAM_TOKEN o CHAT_ID en el archivo .env');
-    process.exit(1);
-}
 
 // =============== HELPERS ===============
 async function enviarTexto(texto) {
@@ -81,19 +74,18 @@ app.post('/enviar-reporte', async (req, res) => {
 
         console.log('📩 Nuevo reporte recibido...');
 
-        // 1. Enviar texto
+        // Enviar texto
         if (texto && texto.trim()) {
             await enviarTexto(texto);
             console.log('✅ Texto enviado');
         }
 
-        // 2. Enviar fotos
+        // Enviar fotos
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
             for (let i = 0; i < fotos.length; i++) {
                 await enviarFotoBase64(fotos[i]);
                 console.log(`✅ Foto ${i + 1}/${fotos.length} enviada`);
 
-                // pequeña pausa para no saturar la API
                 if (i < fotos.length - 1) {
                     await new Promise(r => setTimeout(r, 400));
                 }
