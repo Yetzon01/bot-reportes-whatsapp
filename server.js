@@ -7,11 +7,11 @@ app.use(express.json({ limit: '50mb' }));
 
 // =============== CONFIGURACIÓN TELEGRAM ===============
 const TELEGRAM_TOKEN = '8952498024:AAE8T6JoQq3t1l70JIWvvbUkdyyUwQgXifw';
-const CHAT_ID = '-1004417748357'; // Grupo: REPORTE GIGP MUNICIPIO SIMÓN BOLÍVAR
+const CHAT_ID = '-1004417748357';
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
-// =============== FUNCIONES TELEGRAM ===============
-async function enviarMensajeTelegram(texto) {
+// =============== HELPERS ===============
+async function enviarTexto(texto) {
     const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -21,68 +21,39 @@ async function enviarMensajeTelegram(texto) {
             parse_mode: 'HTML'
         })
     });
-    return res.json();
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.description || 'Error enviando texto');
+    return data;
 }
 
-async function enviarFotoTelegram(base64, caption = '') {
-    // Convertir base64 a buffer
-    const base64Data = base64.replace(/^data:image\/\w+;base64,/, '');
-    const buffer = Buffer.from(base64Data, 'base64');
+async function enviarFotoBase64(base64, caption = '') {
+    const pureBase64 = base64.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(pureBase64, 'base64');
 
-    // Crear FormData manualmente
-    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
-    const parts = [];
-
-    // chat_id
-    parts.push(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="chat_id"\r\n\r\n` +
-        `${CHAT_ID}\r\n`
-    );
-
-    // caption (solo en la primera foto)
+    // Usamos FormData nativo de Node 18+
+    const form = new FormData();
+    form.append('chat_id', CHAT_ID);
     if (caption) {
-        parts.push(
-            `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="caption"\r\n\r\n` +
-            `${caption}\r\n`
-        );
-        parts.push(
-            `--${boundary}\r\n` +
-            `Content-Disposition: form-data; name="parse_mode"\r\n\r\n` +
-            `HTML\r\n`
-        );
+        form.append('caption', caption);
+        form.append('parse_mode', 'HTML');
     }
-
-    // foto
-    parts.push(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="photo"; filename="reporte.jpg"\r\n` +
-        `Content-Type: image/jpeg\r\n\r\n`
-    );
-
-    const bodyStart = Buffer.from(parts.join(''), 'utf8');
-    const bodyEnd = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-    const body = Buffer.concat([bodyStart, buffer, bodyEnd]);
+    form.append('photo', new Blob([buffer], { type: 'image/jpeg' }), 'reporte.jpg');
 
     const res = await fetch(`${TELEGRAM_API}/sendPhoto`, {
         method: 'POST',
-        headers: {
-            'Content-Type': `multipart/form-data; boundary=${boundary}`,
-            'Content-Length': body.length
-        },
-        body: body
+        body: form
     });
-
-    return res.json();
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.description || 'Error enviando foto');
+    return data;
 }
 
 // =============== RUTAS ===============
 app.get('/', (req, res) => {
     res.send(`
         <h2>🤖 Bot de Reportes - Telegram</h2>
-        <p>Estado: <b>ACTIVO</b></p>
-        <p><a href="/estado">Ver estado</a></p>
+        <p>Estado: <b style="color:green">ACTIVO</b></p>
+        <p><a href="/estado">/estado</a></p>
     `);
 });
 
@@ -91,12 +62,10 @@ app.get('/estado', (req, res) => {
         ok: true,
         plataforma: 'Telegram',
         chat_id: CHAT_ID,
-        uptimeProcesoSeg: Math.round(process.uptime()),
-        mensaje: 'Bot de Telegram funcionando correctamente'
+        uptimeProcesoSeg: Math.round(process.uptime())
     });
 });
 
-// === Endpoint principal (compatible con tu index.html) ===
 app.post('/enviar-reporte', async (req, res) => {
     try {
         const { texto, fotos } = req.body;
@@ -105,32 +74,28 @@ app.post('/enviar-reporte', async (req, res) => {
             return res.status(400).json({ error: 'No se recibió texto ni fotos' });
         }
 
-        // Si hay fotos
+        console.log('📩 Nuevo reporte recibido...');
+
+        // Primero enviamos el texto (si hay)
+        if (texto && texto.trim()) {
+            await enviarTexto(texto);
+            console.log('✅ Texto enviado');
+        }
+
+        // Luego las fotos
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
             for (let i = 0; i < fotos.length; i++) {
-                const caption = i === 0 ? (texto || '') : '';
-                const resultado = await enviarFotoTelegram(fotos[i], caption);
-
-                if (!resultado.ok) {
-                    console.error('Error enviando foto:', resultado);
-                    return res.status(500).json({ error: 'Error al enviar foto a Telegram', detalle: resultado });
-                }
-
-                // Pequeña pausa entre fotos
+                const caption = (i === 0 && !texto) ? '' : ''; // el texto ya se envió aparte
+                await enviarFotoBase64(fotos[i], caption);
+                console.log(`✅ Foto ${i + 1}/${fotos.length} enviada`);
+                // pequeña pausa para no saturar
                 if (i < fotos.length - 1) {
-                    await new Promise(r => setTimeout(r, 300));
+                    await new Promise(r => setTimeout(r, 400));
                 }
-            }
-        } else {
-            // Solo texto
-            const resultado = await enviarMensajeTelegram(texto);
-            if (!resultado.ok) {
-                console.error('Error enviando mensaje:', resultado);
-                return res.status(500).json({ error: 'Error al enviar mensaje a Telegram', detalle: resultado });
             }
         }
 
-        console.log('✅ Reporte enviado correctamente a Telegram');
+        console.log('🎉 Reporte completo enviado a Telegram');
         res.json({ ok: true, mensaje: 'Reporte entregado con éxito a Telegram' });
 
     } catch (err) {
@@ -139,16 +104,14 @@ app.post('/enviar-reporte', async (req, res) => {
     }
 });
 
-// =============== KEEP-ALIVE (para Render) ===============
+// Keep-alive para Render
 const MI_URL = process.env.RENDER_EXTERNAL_URL || 'https://bot-reportes-vi97.onrender.com';
-
 setInterval(() => {
     fetch(`${MI_URL}/estado`).catch(() => {});
-}, 4 * 60 * 1000); // cada 4 minutos
+}, 4 * 60 * 1000);
 
-// =============== INICIAR SERVIDOR ===============
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor Telegram corriendo en puerto ${PORT}`);
-    console.log(`📱 Enviando reportes al grupo: ${CHAT_ID}`);
+    console.log(`🚀 Servidor Telegram en puerto ${PORT}`);
+    console.log(`📱 Grupo: ${CHAT_ID}`);
 });
