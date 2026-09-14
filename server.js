@@ -1,3 +1,4 @@
+require('dotenv').config(); // ← necesitas instalar dotenv
 const express = require('express');
 const cors = require('cors');
 
@@ -5,10 +6,15 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// =============== CONFIGURACIÓN TELEGRAM ===============
-const TELEGRAM_TOKEN = '8952498024:AAE8T6JoQq3t1l70JIWvvbUkdyyUwQgXifw';
-const CHAT_ID = '-1004417748357';
+// =============== CONFIGURACIÓN (desde .env) ===============
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+if (!TELEGRAM_TOKEN || !CHAT_ID) {
+    console.error('❌ Faltan TELEGRAM_TOKEN o CHAT_ID en el archivo .env');
+    process.exit(1);
+}
 
 // =============== HELPERS ===============
 async function enviarTexto(texto) {
@@ -30,7 +36,6 @@ async function enviarFotoBase64(base64, caption = '') {
     const pureBase64 = base64.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(pureBase64, 'base64');
 
-    // Usamos FormData nativo de Node 18+
     const form = new FormData();
     form.append('chat_id', CHAT_ID);
     if (caption) {
@@ -76,19 +81,19 @@ app.post('/enviar-reporte', async (req, res) => {
 
         console.log('📩 Nuevo reporte recibido...');
 
-        // Primero enviamos el texto (si hay)
+        // 1. Enviar texto
         if (texto && texto.trim()) {
             await enviarTexto(texto);
             console.log('✅ Texto enviado');
         }
 
-        // Luego las fotos
+        // 2. Enviar fotos
         if (fotos && Array.isArray(fotos) && fotos.length > 0) {
             for (let i = 0; i < fotos.length; i++) {
-                const caption = (i === 0 && !texto) ? '' : ''; // el texto ya se envió aparte
-                await enviarFotoBase64(fotos[i], caption);
+                await enviarFotoBase64(fotos[i]);
                 console.log(`✅ Foto ${i + 1}/${fotos.length} enviada`);
-                // pequeña pausa para no saturar
+
+                // pequeña pausa para no saturar la API
                 if (i < fotos.length - 1) {
                     await new Promise(r => setTimeout(r, 400));
                 }
